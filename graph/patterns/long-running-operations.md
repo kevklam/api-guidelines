@@ -42,9 +42,7 @@ There are two flavors of this solution:
 </p>
 <!-- markdownlint-enable MD033 -->
 
-The RELO pattern is the preferred pattern for long running operations and should be
-used wherever possible. The pattern avoids complexity, and consistent resource
-presentation makes things simpler for our users and tooling chain.
+When in doubt, the RELO pattern is the preferred pattern for long running operations. There is quite a bit of inconsistency in how stepwise operations have been implemented, and tooling/SDK support is suboptimal. RELO also provides a lot more flexibility and power in terms of being able to represent progress in a more meaningful way than a simple percentage.
 
 In general, Microsoft Graph API guidelines for long running operations follow [Microsoft REST API
 Guidelines](https://github.com/microsoft/api-guidelines/blob/vNext/Guidelines.md#13-long-running-operations).
@@ -59,13 +57,30 @@ There are some deviations from the base guidelines where Microsoft Graph API sta
 
 ## When to use this pattern
 
-Any API call that is expected to take longer than one second in the 99th percentile should use the long running operations pattern.
+Any API call that is expected to take longer than one second in the 99th percentile should be considered a 'long running operations' and use one of these patterns.
 
-How do you select which flavor of LRO pattern to use? An API designer can follow these heuristics:
+How do you select which pattern to use?
 
-1. If a service can create a resource with a minimal latency and continue updating its status according to the well-defined and stable state transition model until completion, then the RELO model is the best choice.
+RELO relies on the concept of the resource having a state model (moving through various states of creating, created, deleting, deleted, updating, pending, publishing etc) and is suitable for modeling operations that drive the resource through those states. A common use case is 'provisioning' flows where you're trying to create something and it takes a while for it to reach usable state. In those cases you immediately create an actual entity that has an ID and return it, and the client polls to find out when it becomes operational. Other likely scenarios include "backup", where the operation is expected to take hours/days/months, and an admin might want to track progress by periodically looking at a portal.
 
-2. Otherwise, a service should follow the stepwise operation pattern.
+'Stepwise' is more useful for cases where the you're doing something 'slow', but the entity you are operating on does not have a formal 'state' model or the operation does not drive the entity into a new 'state'. Let's look at a hypothetical API like 'copy folder' - the original folder isn't modified, and it doesn't have the concept of a 'state' that can change. But there is an async job slowly working in the background to complete the action you requested, and you might want to track progress/completion of the operation.
+
+In those cases, you could theoretically create an entire model to represent a "folder copy job", define an enum for its lifecycle stages, and use RELO to track the lifecycle of the job from start to completion. However, it's pretty heavyweight to create a new entity and enum just to answer the question "Is it done?". This is especially true if the operation is expected to only take a few seconds to complete. In these cases, Stepwise is simpler - just return a URL that you can poll for status, or that you can ignore for 'fire and forget'.
+
+However, let's say the copy operation is often expected to take months to complete, and someone is likely to want to periodically open up some management UX to see its progress and potentially cancel or retry in case of a few files/subfolders failing to copy. In this case it makes much more sense to model the copy operation as an explicit entity with rich management capabilities, at which point RELO makes more sense.
+
+
+Stepwise can be thought of as a special case of RELO that is 'wrapped' to make simpler. The monitor/polling URL is just the Graph URL of an 'operation' entity that has its own state model (in progress, complete etc). The main distinction is that:
+
+- 'operation' has a standardized schema across all APIs using the stepwise pattern (sort of - various workloads have implemented slight variations) whereas in RELO there is no standardization. This has both pros (simple, consistent) and cons (functionality limited to 'lowest common denominator' of all stepwise scenarios).
+- Stepwise hides the fact that there is an 'operation' entity. What we publicly document is that it is an opaque URL that is valid for some finite length of time. Although this is simple to comprehend, the returned URL is designed to be disposable/ephemeral which has both pros (fire and forget) and cons (hard to keep track of for anything longer than a few seconds to a minute).
+
+
+Here are some heuristics for choosing between the two patterns:
+
+1. If a service can create a resource with a minimal latency and continue updating its status according to the well-defined and stable state transition model until completion, then the RELO model is the best choice. This is often the case for provisioning and other resource lifecycle management scenarios.
+2. For scenarios that involve a relatively short-duration 'fire and forget' operation that does not involve driving a resource through some state model, Stepwise is often preferred.
+3. For scenarios that involve operations on the timescale of hours to months (backup, migration etc), the operation should be modeled explicitly as an entity and use RELO.
  
 ## Issues and considerations
 
